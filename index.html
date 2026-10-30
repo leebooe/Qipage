@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#253e31">
+  <meta name="color-scheme" content="dark">
+  <title>栖页 · 新的开始</title>
+  <link rel="icon" href="assets/leaf.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script src="vendor/marked.umd.js" defer></script>
+  <script src="vendor/purify.min.js" defer></script>
+  <script src="src/app.js" type="module"></script>
+</head>
+<body>
+  <div class="backdrop" aria-hidden="true"><div id="wallpaper-image"></div><video id="wallpaper-video" muted loop playsinline preload="metadata"></video><div class="backdrop-shade"></div><div class="backdrop-grain"></div></div>
+  <header class="topbar">
+    <a class="brand" href="index.html" aria-label="栖页首页"><img src="assets/leaf.svg" alt=""><span>栖页<span class="brand-latin">QIPAGE</span></span></a>
+    <div class="topbar-right"><span class="day-message">留一点时间，给自己。</span><span class="topbar-divider"></span><button class="text-button" id="layout-button" data-action="layout" title="自由调整组件位置"><span data-icon="layout"></span><span>编辑布局</span></button><button class="icon-button" data-action="settings" aria-label="打开设置" title="设置"><span data-icon="settings"></span></button></div>
+  </header>
+  <nav class="side-rail" aria-label="快捷操作">
+    <button class="rail-button active" data-action="home" title="我的主页" aria-label="我的主页"><span data-icon="home"></span></button>
+    <button class="rail-button" data-action="notes" title="我的笔记" aria-label="我的笔记"><span data-icon="note"></span></button>
+    <button class="rail-button" data-action="wallpaper" title="壁纸与外观" aria-label="壁纸与外观"><span data-icon="image"></span></button>
+    <span class="rail-divider"></span>
+    <button class="rail-button" data-action="add" title="添加快捷链接或分组" aria-label="添加快捷链接或分组"><span data-icon="plus"></span></button>
+    <button class="rail-button rail-bottom" data-action="help" title="使用指南" aria-label="使用指南"><span data-icon="help"></span></button>
+  </nav>
+  <main id="workspace" class="workspace" aria-label="我的新标签页"></main>
+  <div class="layout-toolbar" id="layout-toolbar" hidden><span data-icon="move"></span><span>全页自由拖动，右下角缩放，靠近参考线自动对齐</span><button class="text-button" data-action="reset-layout">重置布局</button><button class="primary-button" data-action="layout">完成布局</button></div>
+  <footer class="footer"><div id="wallpaper-credit"><span data-icon="image"></span><span>自然之境 · Unsplash</span></div><div class="footer-right"><span class="local-status"><i></i>数据保存在本机</span><button class="icon-button" data-action="next-wallpaper" aria-label="切换壁纸" title="换一张壁纸"><span data-icon="shuffle"></span></button><button class="icon-button" id="video-toggle" data-action="video-toggle" aria-label="暂停视频" title="暂停视频" hidden><span data-icon="pause"></span></button><button class="icon-button" data-action="focus" aria-label="进入专注模式" title="专注模式"><span data-icon="expand"></span></button></div></footer>
+  <div id="modal-root"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <input type="file" id="import-file" accept="application/json,.json" hidden>
+</body>
+</html>
