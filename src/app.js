@@ -1,6 +1,6 @@
 import { icon, hydrateIcons } from './icons.js';
 import { defaults, DEFAULT_LAYOUT, SETTINGS, uid, clone, safeUrl, normalize, readState, writeState, watchState } from './store.js';
-import { COLLECTION, TIME_PERIODS, timePeriod, builtin, chooseWallpaper, trackSelection, isDue } from './wallpapers.js';
+import { timePeriod, chooseWallpaper, isDue } from './wallpapers.js';
 
 const $ = (query, root = document) => root.querySelector(query);
 const $$ = (query, root = document) => [...root.querySelectorAll(query)];
@@ -11,6 +11,7 @@ let editingLayout = false;
 let noteMode = 'preview';
 let savingTimer, toastTimer, modalFocus, wallpaperBusy = false, wallpaperGeneration = 0;
 let wallpaperRetryAt = 0, wallpaperRequest = 0;
+const canFetchWallpaper = () => state.settings.backgroundType === 'image' || Boolean(state.settings.pixabayKey);
 let dragState = null, pendingExternal = null;
 let lastDate = '';
 const workspace = $('#workspace');
@@ -178,16 +179,43 @@ function renderQuote() {
 function applyAppearance() {
   const s = state.settings;
   const style = document.documentElement.style;
+  const channels = s.themeColor.slice(1).match(/.{2}/g).map(channel => parseInt(channel, 16));
+  const linear = channels.map(channel => {
+    const value = channel / 255;
+    return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
+  });
+  const luminance = linear[0] * .2126 + linear[1] * .7152 + linear[2] * .0722;
+  style.setProperty('--accent', s.themeColor);
+  style.setProperty('--accent-ink', luminance > .179 ? '#18201c' : '#ffffff');
   style.setProperty('--wallpaper-opacity', s.opacity / 100);
   style.setProperty('--wallpaper-brightness', s.brightness / 100);
   style.setProperty('--card-alpha', s.cardOpacity / 100);
   style.setProperty('--glass-blur', `${s.blur}px`);
 }
+function updateThemeColor(color) {
+  if (!/^#[a-f\d]{6}$/i.test(color)) return;
+  state.settings.themeColor = color.toLowerCase();
+  applyAppearance();
+  const picker = $('#theme-color');
+  if (picker) picker.value = state.settings.themeColor;
+  const output = $('#theme-color-value');
+  if (output) output.textContent = state.settings.themeColor.toUpperCase();
+  $$('.theme-color-preset').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.color === state.settings.themeColor));
+  });
+  saveSoon();
+}
 async function displayWallpaper(wallpaper) {
-  if (!wallpaper) return;
   const generation = ++wallpaperGeneration;
   const image = $('#wallpaper-image'), video = $('#wallpaper-video');
   const credit = $('#wallpaper-credit');
+  if (!wallpaper) {
+    video.pause(); video.onloadeddata = null; video.onerror = null; video.removeAttribute('src'); video.load(); video.style.display = 'none';
+    image.style.removeProperty('background-image');
+    $('#video-toggle').hidden = true;
+    credit.innerHTML = `${icon('image')}<button data-action="${canFetchWallpaper() ? 'next-wallpaper' : 'wallpaper'}">${canFetchWallpaper() ? '从当前来源获取背景' : '配置壁纸来源'}</button>`;
+    return;
+  }
   const source = wallpaper.type === 'video' ? 'Pixabay' : 'Unsplash';
   const sourceUrl = wallpaper.type === 'video' ? 'https://pixabay.com/videos/' : 'https://unsplash.com/?utm_source=qipage&utm_medium=referral';
   // Attribution uses separate photographer and provider links.
@@ -204,7 +232,7 @@ async function displayWallpaper(wallpaper) {
       }
       updateVideoButton();
     };
-    video.onerror = () => { if (generation === wallpaperGeneration) { video.style.display = 'none'; toast('视频暂时无法加载，已保留森林背景，可稍后换一段。'); } };
+    video.onerror = () => { if (generation === wallpaperGeneration) { video.style.display = 'none'; toast('视频暂时无法加载，已保留当前背景，可稍后换一段。'); } };
     if (video.readyState >= 2) video.onloadeddata();
   } else {
     video.pause(); video.onloadeddata = null; video.onerror = null; video.removeAttribute('src'); video.load(); video.style.display = 'none';
@@ -221,18 +249,17 @@ function updateVideoButton() {
   $('#video-toggle').setAttribute('aria-label', paused ? '播放视频' : '暂停视频');
   $('#video-toggle').title = paused ? '播放视频' : '暂停视频';
 }
-async function nextWallpaper(force = true) {
+async function nextWallpaper() {
   if (wallpaperBusy) return;
   wallpaperBusy = true; document.body.classList.add('busy');
   const requestId = ++wallpaperRequest;
   try {
     const settings = { ...state.settings };
     const period = timePeriod().id;
-    const next = await chooseWallpaper(settings, state.wallpaper, force);
-    if (requestId !== wallpaperRequest || settings.backgroundType !== state.settings.backgroundType || settings.query !== state.settings.query || settings.unsplashKey !== state.settings.unsplashKey || settings.pixabayKey !== state.settings.pixabayKey || settings.frequency !== state.settings.frequency || (settings.backgroundType === 'image' && period !== timePeriod().id)) return;
+    const next = await chooseWallpaper(settings, state.wallpaper);
+    if (requestId !== wallpaperRequest || settings.backgroundType !== state.settings.backgroundType || settings.query !== state.settings.query || settings.pixabayKey !== state.settings.pixabayKey || settings.frequency !== state.settings.frequency || (settings.backgroundType === 'image' && period !== timePeriod().id)) return;
     wallpaperRetryAt = 0;
     state.wallpaper = next; await persist(); await displayWallpaper(next);
-    void trackSelection(next, settings.unsplashKey);
   } catch (error) { if (requestId === wallpaperRequest) { wallpaperRetryAt = Date.now() + 300000; toast(error.message || '连接壁纸服务失败，请稍后再试。'); } }
   finally { wallpaperBusy = false; document.body.classList.remove('busy'); }
 }
@@ -359,25 +386,28 @@ function rangeSetting(key, title, max = 100, unit = '%') {
 function toggleSetting(key, title, description) {
   return `<label class="toggle-row"><span>${title}${description ? `<small>${description}</small>` : ''}</span><input type="checkbox" data-setting="${key}" ${state.settings[key] ? 'checked' : ''} aria-label="${title}"></label>`;
 }
+function themeColorSetting() {
+  const color = state.settings.themeColor;
+  const presets = [['#d6e5bf', '苔绿'], ['#a8d8e8', '晴蓝'], ['#c7b8ea', '雾紫'], ['#e9b4c3', '蔷薇'], ['#edc48d', '暖杏'], ['#c5d0d8', '月灰']];
+  return `<div class="theme-color-setting"><div class="theme-color-heading"><span class="section-label">主题色</span><button type="button" class="text-button" data-action="theme-color" data-color="${SETTINGS.themeColor}">恢复默认</button></div><div class="theme-color-presets" role="group" aria-label="预设主题色">${presets.map(([value, label]) => `<button type="button" class="theme-color-preset" data-action="theme-color" data-color="${value}" style="--swatch:${value}" aria-label="${label}" aria-pressed="${color === value}"><span class="theme-color-dot"></span><span>${label}</span></button>`).join('')}</div><label class="theme-color-custom" for="theme-color"><span>自定义颜色</span><input id="theme-color" type="color" data-setting="themeColor" value="${escape(color)}" aria-label="自定义主题色"><output id="theme-color-value" for="theme-color">${escape(color.toUpperCase())}</output></label><p class="field-hint">即时应用于按钮、选中状态与面板配色，自动保存到本机。</p></div>`;
+}
 function wallpaperSettings(openKeys) {
   const s = state.settings;
   const imageMode = s.backgroundType === 'image';
-  const currentPeriod = timePeriod();
-  const gallery = TIME_PERIODS.map(period => `<section class="wallpaper-period" aria-label="${period.label}背景合集"><div class="wallpaper-period-heading"><span>${period.label}<small>${period.hours}</small>${period.id === currentPeriod.id ? '<em>当前时段</em>' : ''}</span><a href="${escape(period.url)}" target="_blank" rel="noopener noreferrer">查看合集 ↗</a></div><div class="wallpaper-gallery">${COLLECTION.map((photo, index) => photo.period === period.id ? `<button class="wallpaper-thumb ${state.wallpaper?.url === photo.url ? 'selected' : ''}" data-action="wallpaper-choice" data-index="${index}" title="${escape(photo.title)} · ${escape(photo.author)}" aria-label="选用${period.label}背景：${escape(photo.title)}" aria-pressed="${state.wallpaper?.url === photo.url}"><img src="${escape(photo.url.replace('w=2560', 'w=240'))}" alt="${escape(photo.title)}" loading="lazy">${state.wallpaper?.url === photo.url ? icon('check') : ''}</button>` : '').join('')}</div></section>`).join('');
-  const frequencies = [...(imageMode ? [['period', '跟随早晨 / 白天 / 傍晚 / 夜间']] : []), ['daily', imageMode ? '每天与时段变化时' : '每天一次'], ['newtab', '每次打开新标签页'], ['hourly', '每小时'], ['1800', '每 30 分钟'], ['900', '每 15 分钟'], ['300', '每 5 分钟'], ['manual', '手动切换']];
-  const refreshLabel = imageMode ? '从当前时段合集换一张' : '按主题换一段';
+  const frequencies = [...(imageMode ? [['period', '跟随时间自动切换']] : []), ['daily', imageMode ? '每天与时段变化时' : '每天一次'], ['newtab', '每次打开新标签页'], ['hourly', '每小时'], ['1800', '每 30 分钟'], ['900', '每 15 分钟'], ['300', '每 5 分钟'], ['manual', '手动切换']];
+  const refreshLabel = imageMode ? '换一张图片' : '按主题换一段';
   return `<p class="modal-subtitle">让风景，随着一天的光线慢慢变化。</p>
+    ${themeColorSetting()}<div class="settings-separator"></div>
     <div class="segmented"><button class="${imageMode ? 'active' : ''}" data-action="background-type" data-type="image">${icon('image')}图片壁纸</button><button class="${imageMode ? '' : 'active'}" data-action="background-type" data-type="video">${icon('video')}视频壁纸</button></div>
-    ${imageMode ? `<div class="section-label">一日四景 · UNSPLASH</div><p class="field-hint">自动模式按本地时间选择合集；点击缩略图后保持手动选择。内置精选各 4 张，配置 Unsplash 密钥后从完整合集中随机获取。</p>${gallery}` : `<div class="status-pill">${icon('video')}Pixabay · 静音循环播放</div><p class="field-hint">${s.pixabayKey ? '视频搜索结果缓存 24 小时，切换时从当前主题中挑选。' : '填写下方 Pixabay API Key，保存主题后即可开启动态风景。'}</p>`}
+    ${imageMode ? `<div class="status-pill">${icon('image')}Unsplash · 自动获取图片</div>` : `<div class="status-pill">${icon('video')}Pixabay · 静音循环播放</div><p class="field-hint">${s.pixabayKey ? '视频搜索结果缓存 24 小时，切换时从当前主题中挑选。' : '填写下方 Pixabay API Key，保存主题后即可开启动态风景。'}</p>`}
     ${selectSetting('frequency', '自动切换频率', frequencies)}
-    ${imageMode ? '<p class="field-hint">自动模式在时段变化时更新背景，所选频率控制时段内的轮换。</p>' : `<label class="form-field"><span>视频主题</span><input data-setting="query" value="${escape(s.query)}" placeholder="forest nature" maxlength="100"><small>使用英文关键词，例如 forest、ocean、mountain。</small></label>`}
+    ${imageMode ? '<p class="field-hint">自动模式按所选规则更新背景。手动模式保留当前图片，点击换图可随机选取另一张。</p>' : `<label class="form-field"><span>视频主题</span><input data-setting="query" value="${escape(s.query)}" placeholder="forest nature" maxlength="100"><small>使用英文关键词，例如 forest、ocean、mountain。</small></label>`}
     <button class="secondary-button" data-action="refresh-wallpaper">${icon('shuffle')}${refreshLabel}</button>
     <div class="settings-separator"></div><div class="section-label">让画面刚刚好</div>${rangeSetting('brightness', '壁纸亮度')}${rangeSetting('opacity', '壁纸不透明度')}${rangeSetting('cardOpacity', '卡片不透明度')}${rangeSetting('blur', '卡片背景模糊', 30, ' px')}
-    <details class="api-details" ${openKeys ? 'open' : ''}><summary>壁纸 API 配置</summary>
-      <label class="form-field"><span>Unsplash Access Key</span><input id="unsplash-key" type="password" data-setting="unsplashKey" value="${escape(s.unsplashKey)}" autocomplete="off" spellcheck="false" placeholder="填写后从四个完整合集中获取图片"><small><a href="https://unsplash.com/oauth/applications" target="_blank" rel="noopener noreferrer">前往 Unsplash Developers 创建应用</a></small></label>
+    ${imageMode ? '' : `<details class="api-details" ${openKeys ? 'open' : ''}><summary>视频 API 配置</summary>
       <label class="form-field"><span>Pixabay API Key</span><input id="pixabay-key" type="password" data-setting="pixabayKey" value="${escape(s.pixabayKey)}" autocomplete="off" spellcheck="false" placeholder="开启视频壁纸所需"><small><a href="https://pixabay.com/api/docs/" target="_blank" rel="noopener noreferrer">前往 Pixabay 获取 API Key</a></small></label>
       <p class="field-hint">密钥保存在当前浏览器本机；数据备份会省略密钥。更换密钥后点击「${refreshLabel}」。</p>
-    </details><div class="settings-save-info">${icon('check')}设置自动保存</div>`;
+    </details>`}<div class="settings-save-info">${icon('check')}设置自动保存</div>`;
 }
 function generalSettings() {
   return `<p class="modal-subtitle">让这里，更像你自己的空间。</p><div class="section-label">时间与问候</div><label class="form-field"><span>希望怎样称呼你？</span><input data-setting="name" value="${escape(state.settings.name)}" placeholder="你的名字（选填）" maxlength="30"></label>${toggleSetting('clock24', '24 小时制')}${toggleSetting('showSeconds', '显示秒数')}${toggleSetting('showGreeting', '显示时段问候')}${toggleSetting('showQuote', '每日一句贴心话', '每天更新一句栖页原创暖心短句')}${toggleSetting('showNotes', '在主页显示笔记')}<div class="settings-separator"></div><div class="section-label">搜索与链接</div>${selectSetting('searchEngine', '默认搜索引擎', Object.entries(engines).map(([key, [label]]) => [key, label]))}${toggleSetting('newTab', '在新标签页打开快捷链接与搜索')}<div class="settings-save-info">${icon('check')}设置自动保存</div>`;
@@ -413,6 +443,7 @@ document.addEventListener('click', async event => {
   else if (action === 'wallpaper') settingsDialog('wallpaper');
   else if (action === 'help') settingsDialog('about');
   else if (action === 'settings-tab') settingsDialog(tab);
+  else if (action === 'theme-color') updateThemeColor(target.dataset.color);
   else if (action === 'add') addDialog();
   else if (action === 'new-link') linkDialog(group);
   else if (action === 'edit-link') linkDialog(group, id);
@@ -448,14 +479,13 @@ document.addEventListener('click', async event => {
   else if (action === 'layout') toggleLayout();
   else if (action === 'reset-layout') { resetLayout(); await persist(); applyLayout(); toast('已恢复默认布局'); }
   else if (action === 'next-wallpaper' || action === 'refresh-wallpaper') {
-    if (state.settings.backgroundType === 'video' && !state.settings.pixabayKey) { settingsDialog('wallpaper', true); toast('填写 Pixabay API Key 后，即可启用视频壁纸。'); }
+    if (!canFetchWallpaper()) { settingsDialog('wallpaper', true); toast('填写 Pixabay API Key 后，即可启用视频壁纸。'); }
     else { target.disabled = true; await nextWallpaper(); if (target.isConnected) target.disabled = false; }
   }
-  else if (action === 'wallpaper-choice') { wallpaperRequest++; state.settings.backgroundType = 'image'; state.settings.frequency = 'manual'; wallpaperRetryAt = 0; state.wallpaper = builtin(Number(index)); await persist(); displayWallpaper(state.wallpaper); settingsDialog('wallpaper'); toast('已选用这张图片，切换频率已设为手动。'); }
   else if (action === 'background-type') {
     if (type === 'video' && state.settings.frequency === 'period') state.settings.frequency = 'daily';
     state.settings.backgroundType = type; await persist(); settingsDialog('wallpaper', type === 'video' && !state.settings.pixabayKey);
-    if (type === 'image' || state.settings.pixabayKey) await nextWallpaper();
+    if (canFetchWallpaper()) await nextWallpaper();
   }
   else if (action === 'video-toggle') { const video = $('#wallpaper-video'); if (video.paused) { try { await video.play(); } catch { toast('视频暂时无法播放，请换一段或稍后重试。'); } } else video.pause(); updateVideoButton(); }
   else if (action === 'focus') {
@@ -465,7 +495,7 @@ document.addEventListener('click', async event => {
     target.setAttribute('aria-label', focused ? '退出专注模式' : '进入专注模式');
   }
   else if (action === 'export-data') {
-    const exported = clone(state); exported.settings.unsplashKey = ''; exported.settings.pixabayKey = '';
+    const exported = clone(state); exported.settings.pixabayKey = '';
     const now = new Date();
     const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     downloadFile(`qipage-backup-${date}.json`, JSON.stringify(exported, null, 2), 'application/json'); toast('备份已导出');
@@ -482,15 +512,22 @@ document.addEventListener('input', event => {
   }
   const key = input.dataset.setting;
   if (!key || !(key in SETTINGS)) return;
+  if (key === 'themeColor') { updateThemeColor(input.value); return; }
   state.settings[key] = input.type === 'checkbox' ? input.checked : input.type === 'range' ? Number(input.value) : input.value;
   if (input.type === 'range') $(`#output-${key}`).textContent = `${input.value}${input.dataset.unit}`;
   applyAppearance();
   if (['showNotes', 'showQuote', 'newTab', 'searchEngine'].includes(key)) renderWorkspace();
   else if (['clock24', 'showSeconds', 'showGreeting', 'name'].includes(key)) updateClock();
-  else if (key === 'frequency' && isDue(state.settings, state.wallpaper) && (state.settings.backgroundType !== 'video' || state.settings.pixabayKey)) { wallpaperRetryAt = 0; void nextWallpaper(false); }
+  else if (key === 'frequency' && isDue(state.settings, state.wallpaper) && canFetchWallpaper()) { wallpaperRetryAt = 0; void nextWallpaper(); }
   saveSoon();
 });
 document.addEventListener('change', event => {
+  if (event.target.id === 'pixabay-key' && state.settings.backgroundType === 'video') {
+    state.settings[event.target.dataset.setting] = event.target.value.trim(); saveSoon();
+    wallpaperRetryAt = 0;
+    if (canFetchWallpaper()) void nextWallpaper();
+    else if (!state.wallpaper) displayWallpaper(null);
+  }
   if (event.target.id === 'note-selector') { state.activeNote = event.target.value; refreshNotes(); saveSoon(); }
   if (event.target.matches('.search-engine')) { state.settings.searchEngine = event.target.value; saveSoon(); }
 });
@@ -528,9 +565,9 @@ $('#import-file').addEventListener('change', async event => {
     const imported = normalize(JSON.parse(await file.text()));
     modal(`${modalHeader('恢复这个备份？', 'upload')}<div class="modal-body"><p class="modal-subtitle">备份内容将替换当前的链接、笔记和布局。建议先导出当前数据。</p><div class="import-summary">${imported.groups.length} 个分组<br>${imported.groups.reduce((sum, g) => sum + g.links.length, 0)} 个快捷链接<br>${imported.notes.length} 篇笔记</div><div class="form-actions"><button class="secondary-button" data-action="export-data">先导出当前数据</button><button class="primary-button" id="restore-backup">恢复备份</button></div></div>`);
     $('#restore-backup').addEventListener('click', async () => {
-      imported.settings.unsplashKey = state.settings.unsplashKey; imported.settings.pixabayKey = state.settings.pixabayKey;
+      imported.settings.pixabayKey = state.settings.pixabayKey;
       const previous = state; state = imported;
-      if (await persist()) { pendingExternal = null; closeModal(); applyAppearance(); renderWorkspace(); displayWallpaper(state.wallpaper || builtin()); toast('备份已恢复'); }
+      if (await persist()) { pendingExternal = null; closeModal(); applyAppearance(); renderWorkspace(); displayWallpaper(state.wallpaper); if (canFetchWallpaper() && isDue(state.settings, state.wallpaper)) void nextWallpaper(); toast('备份已恢复'); }
       else state = previous;
     }, { once: true });
   } catch (error) { toast(error instanceof SyntaxError ? '这个文件无法解析，请选择栖页导出的 JSON 备份。' : error.message); }
@@ -673,7 +710,7 @@ workspace.addEventListener('dragend', clearLinkDrag);
 function applyExternal(value) {
   if (JSON.stringify(value) === JSON.stringify(state)) return;
   if (editingLayout || dragState || linkDrag || $('#modal-root').firstChild || document.activeElement?.matches('textarea,input,select')) { pendingExternal = value; return; }
-  try { const before = state.wallpaper?.url; state = normalize(value); applyAppearance(); renderWorkspace(); if (before !== state.wallpaper?.url) displayWallpaper(state.wallpaper || builtin()); }
+  try { const before = state.wallpaper?.url; state = normalize(value); applyAppearance(); renderWorkspace(); if (before !== state.wallpaper?.url) displayWallpaper(state.wallpaper); }
   catch { /* Ignore incompatible data from another page. */ }
 }
 watchState(applyExternal);
@@ -695,16 +732,16 @@ document.addEventListener('visibilitychange', () => {
     updateClock();
     if (resumeVideo && state.wallpaper?.type === 'video') video.play().catch(() => {});
     if (pendingExternal && !$('#modal-root').firstChild && !editingLayout) { const next = pendingExternal; pendingExternal = null; applyExternal(next); }
-    if (Date.now() >= wallpaperRetryAt && isDue(state.settings, state.wallpaper) && (state.settings.backgroundType !== 'video' || state.settings.pixabayKey)) void nextWallpaper(false);
+    if (Date.now() >= wallpaperRetryAt && isDue(state.settings, state.wallpaper) && canFetchWallpaper()) void nextWallpaper();
   }
   updateVideoButton();
 });
 
 hydrateIcons(); applyAppearance(); renderWorkspace();
-if (!state.wallpaper) { state.wallpaper = builtin(); await persist(); }
+if (!state.wallpaper) await persist();
 displayWallpaper(state.wallpaper);
-if (isDue(state.settings, state.wallpaper, true) && (state.settings.backgroundType !== 'video' || state.settings.pixabayKey)) void nextWallpaper(false);
+if (isDue(state.settings, state.wallpaper, true) && canFetchWallpaper()) void nextWallpaper();
 setInterval(updateClock, 1000);
 setInterval(() => {
-  if (!document.hidden && Date.now() >= wallpaperRetryAt && isDue(state.settings, state.wallpaper) && (state.settings.backgroundType !== 'video' || state.settings.pixabayKey)) void nextWallpaper(false);
+  if (!document.hidden && Date.now() >= wallpaperRetryAt && isDue(state.settings, state.wallpaper) && canFetchWallpaper()) void nextWallpaper();
 }, 30000);

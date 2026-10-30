@@ -1,8 +1,9 @@
 export const uid = () => crypto.randomUUID();
 export const clone = value => structuredClone(value);
 export const SETTINGS = {
+  themeColor: '#d6e5bf',
   backgroundType: 'image', frequency: 'period', brightness: 82, opacity: 100,
-  cardOpacity: 30, blur: 16, query: 'forest nature', unsplashKey: '', pixabayKey: '',
+  cardOpacity: 30, blur: 16, query: 'forest nature', pixabayKey: '',
   clock24: true, showSeconds: false, showGreeting: true, name: '',
   searchEngine: 'bing', newTab: true, showQuote: true, showNotes: true,
 };
@@ -51,6 +52,7 @@ export function normalize(value) {
   const base = defaults();
   const s = value.settings || {};
   const settings = { ...SETTINGS };
+  if (typeof s.themeColor === 'string' && /^#[a-f\d]{6}$/i.test(s.themeColor)) settings.themeColor = s.themeColor.toLowerCase();
   for (const key of ['clock24', 'showSeconds', 'showGreeting', 'newTab', 'showQuote', 'showNotes']) if (typeof s[key] === 'boolean') settings[key] = s[key];
   for (const [key, choices] of Object.entries({ backgroundType: ['image', 'video'], frequency: ['period', 'manual', 'newtab', 'hourly', 'daily', '300', '900', '1800'], searchEngine: ['bing', 'google', 'baidu', 'duckduckgo'] })) if (choices.includes(s[key])) settings[key] = s[key];
   if (settings.backgroundType === 'video' && settings.frequency === 'period') settings.frequency = 'daily';
@@ -58,7 +60,6 @@ export function normalize(value) {
   settings.blur = bounded(s.blur, 0, 30, 16);
   settings.query = short(s.query, 100, SETTINGS.query).trim() || SETTINGS.query;
   settings.name = short(s.name, 30);
-  settings.unsplashKey = short(s.unsplashKey, 300);
   settings.pixabayKey = short(s.pixabayKey, 300);
   const ids = new Set();
   const unique = value => { let id = short(value, 80); if (!/^[a-z\d-]+$/i.test(id) || ids.has(id)) id = uid(); ids.add(id); return id; };
@@ -84,8 +85,11 @@ export function normalize(value) {
       if (wallpaper?.type === 'image') {
         wallpaper.period = ['morning', 'day', 'evening', 'night'].includes(wp.period) ? wp.period : '';
         wallpaper.collectionId = short(wp.collectionId, 30);
+        if (wp.source === 'unsplash-collection') wallpaper.source = 'unsplash-collection';
+        // Retire built-in selections while keeping photos read from collection pages or the legacy API.
+        if (!wallpaper.source && !wallpaper.downloadUrl) wallpaper = null;
       }
-    } catch { /* A damaged wallpaper falls back to the built-in selection. */ }
+    } catch { /* A damaged wallpaper is replaced by the next online selection. */ }
   }
   return { version: 1, settings, groups, notes, layout, layoutSpace, wallpaper, activeNote: notes.some(n => n.id === value.activeNote) ? value.activeNote : notes[0]?.id || '' };
 }
