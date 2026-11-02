@@ -1,18 +1,25 @@
 import { localImage } from './local-images.js';
+import { is4kPicsumImageUrl } from './picsum-source.js';
 
 const CACHE_NAME = 'qipage-wallpaper-images-v1';
 const MAX_IMAGES = 6;
 const downloads = new Map();
+let cachePromise;
 
 function imageUrl(value) {
   const url = new URL(value);
-  if (url.protocol !== 'https:' || url.hostname !== 'images.unsplash.com') throw new Error('图片来源无效。');
+  if (!is4kPicsumImageUrl(value)) throw new Error('4K 图片来源无效。');
   return url.href;
 }
 
-async function imageCache() {
-  try { return await globalThis.caches?.open(CACHE_NAME) || null; }
-  catch { return null; }
+function imageCache() {
+  if (!cachePromise) cachePromise = (async () => {
+    const cache = await globalThis.caches?.open(CACHE_NAME);
+    if (!cache) return null;
+    for (const key of await cache.keys()) if (!is4kPicsumImageUrl(key.url)) await cache.delete(key);
+    return cache;
+  })().catch(() => null);
+  return cachePromise;
 }
 
 async function storeImage(cache, url, blob) {

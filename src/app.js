@@ -3,6 +3,7 @@ import { defaults, DEFAULT_LAYOUT, SETTINGS, uid, clone, safeUrl, normalize, rea
 import { timePeriod, chooseWallpaper, preloadNextWallpaper, isDue } from './wallpapers.js';
 import { wallpaperImage, forgetWallpaperImage } from './wallpaper-images.js';
 import { uploadedImage } from './local-images.js';
+import { PICSUM_SOURCE_URL } from './picsum-source.js';
 import { AERIAL_CATEGORIES, AERIAL_QUALITIES, AERIAL_SOURCE_URL, prepareAerial, lowerAerial } from './aerials.js';
 
 const $ = (query, root = document) => root.querySelector(query);
@@ -56,11 +57,6 @@ function toast(message) {
   $('#toast').textContent = message;
   $('#toast').classList.add('visible');
   toastTimer = setTimeout(() => $('#toast').classList.remove('visible'), 4400);
-}
-function wallpaperAccessNotice(error) {
-  const notice = $('#wallpaper-access-notice');
-  notice.hidden = !error;
-  notice.innerHTML = error ? `<strong>Unsplash 暂时限制了图片访问</strong><p>在当前浏览器打开图片来源，查看并完成站点提示后，回到这里重试。</p><div class="image-upload-row"><a class="secondary-button" href="${escape(error.accessUrl)}" target="_blank" rel="noopener noreferrer">打开图片来源 ↗</a><button class="primary-button" data-action="refresh-wallpaper">重试</button><button class="text-button" data-action="dismiss-wallpaper-access">收起</button></div>` : '';
 }
 async function persist() {
   clearTimeout(savingTimer);
@@ -214,7 +210,6 @@ function updateThemeColor(color) {
   saveSoon();
 }
 async function displayWallpaper(wallpaper, startAt = 0) {
-  if (wallpaper?.source === 'local-upload' || wallpaper?.type === 'video') wallpaperAccessNotice(null);
   const generation = ++wallpaperGeneration;
   const image = $('#wallpaper-image'), video = $('#wallpaper-video');
   const credit = $('#wallpaper-credit');
@@ -244,8 +239,8 @@ async function displayWallpaper(wallpaper, startAt = 0) {
       return;
     }
   }
-  const source = wallpaper.type === 'video' ? `Apple Aerial · ${wallpaper.quality === '4k' ? '4K' : '1080p'}` : 'Unsplash';
-  const sourceUrl = wallpaper.type === 'video' ? AERIAL_SOURCE_URL : 'https://unsplash.com/?utm_source=qipage&utm_medium=referral';
+  const source = wallpaper.type === 'video' ? `Apple Aerial · ${wallpaper.quality === '4k' ? '4K' : '1080p'}` : 'Picsum';
+  const sourceUrl = wallpaper.type === 'video' ? AERIAL_SOURCE_URL : PICSUM_SOURCE_URL;
   // Attribution uses separate photographer and provider links.
   credit.removeAttribute('href');
   credit.innerHTML = wallpaper.source === 'local-upload'
@@ -346,19 +341,12 @@ async function nextWallpaper(keepFilm = false) {
       ? await prepareAerial(state.wallpaper, settings) : await chooseWallpaper(settings, state.wallpaper);
     if (requestId !== wallpaperRequest || settings.backgroundType !== state.settings.backgroundType || settings.aerialCategory !== state.settings.aerialCategory || settings.aerialQuality !== state.settings.aerialQuality || settings.frequency !== state.settings.frequency || (settings.backgroundType === 'image' && period !== timePeriod().id)) return;
     wallpaperRetryAt = 0;
-    wallpaperAccessNotice(null);
     state.wallpaper = next; await persist();
     if (requestId === wallpaperRequest) await displayWallpaper(next);
   } catch (error) {
     if (requestId === wallpaperRequest) {
-      if (error.code === 'unsplash-access') {
-        // Wait for an explicit retry while the user deals with the site's access prompt.
-        wallpaperRetryAt = Infinity;
-        wallpaperAccessNotice(error);
-      } else {
-        wallpaperRetryAt = Date.now() + 300000;
-        toast(error.message || '连接壁纸服务失败，请稍后再试。');
-      }
+      wallpaperRetryAt = Date.now() + 300000;
+      toast(error.message || '连接壁纸服务失败，请稍后再试。');
     }
   }
   finally { if (requestId === wallpaperRequest) document.body.classList.remove('busy'); }
@@ -529,7 +517,7 @@ function wallpaperSettings() {
   return `<p class="modal-subtitle">让风景，随着一天的光线慢慢变化。</p>
     ${themeColorSetting()}<div class="settings-separator"></div>
     <div class="segmented"><button class="${imageMode ? 'active' : ''}" data-action="background-type" data-type="image">${icon('image')}图片壁纸</button><button class="${imageMode ? '' : 'active'}" data-action="background-type" data-type="video">${icon('video')}视频壁纸</button></div>
-    ${imageMode ? `<div class="status-pill">${icon('image')}${localWallpaper ? '本地壁纸' : 'Unsplash · 自动获取图片'}</div>${localWallpaper ? `<p class="field-hint">当前：${escape(state.wallpaper.title)}。已固定为手动切换，选择自动频率或换图可恢复在线背景。</p>` : ''}` : `<div class="status-pill">${icon('video')}Apple Aerial · 114 段风景影片</div><p class="field-hint">选择即可播放，影片由 Apple 直接提供。静音循环，后台自动暂停。</p>`}
+    ${imageMode ? `<div class="status-pill">${icon('image')}${localWallpaper ? '本地壁纸' : 'Picsum · 4K 图片'}</div>${localWallpaper ? `<p class="field-hint">当前：${escape(state.wallpaper.title)}。已固定为手动切换，选择自动频率或换图可恢复在线背景。</p>` : ''}` : `<div class="status-pill">${icon('video')}Apple Aerial · 114 段风景影片</div><p class="field-hint">选择即可播放，影片由 Apple 直接提供。静音循环，后台自动暂停。</p>`}
     ${selectSetting('frequency', '自动切换频率', frequencies)}
     ${imageMode ? '<p class="field-hint">自动模式按所选规则更新背景。手动模式保留当前图片，点击换图可随机选取另一张。</p>' : `${selectSetting('aerialCategory', '风景分类', AERIAL_CATEGORIES)}${selectSetting('aerialQuality', '航拍画质', AERIAL_QUALITIES)}<p class="field-hint">自动模式优先播放设备支持的 4K，加载失败时切换到同一段的 1080p。4K 约需 12 Mbps，1080p 约需 10 Mbps。</p>`}
     <div class="image-upload-row"><button class="secondary-button" data-action="refresh-wallpaper">${icon('shuffle')}${refreshLabel}</button>${imageMode ? `<button class="secondary-button" data-action="upload-wallpaper">${icon('upload')}上传本地壁纸</button>` : ''}</div>
@@ -543,7 +531,7 @@ function dataSettings() {
   return `<p class="modal-subtitle">好好收纳，也安心留存。</p><div class="data-card"><h3>你的本机空间</h3><p>${state.groups.length} 个分组 · ${state.groups.reduce((sum, group) => sum + group.links.length, 0)} 个快捷链接 · ${state.notes.length} 篇笔记<br>内容保存于当前浏览器的扩展存储。</p></div><div class="data-card"><h3>导出备份</h3><p>保存全部快捷链接、Markdown 笔记、布局和外观设置，包括航拍分类与画质。</p><button class="secondary-button" data-action="export-data">${icon('download')}导出 JSON 备份</button></div><div class="data-card"><h3>从备份恢复</h3><p>导入栖页备份后，将使用备份内容替换当前链接、笔记、布局和外观设置。</p><button class="secondary-button" data-action="import-data">${icon('upload')}选择备份文件</button></div><p class="field-hint">Chrome、Edge 与不同浏览器用户之间可通过备份迁移。建议定期导出。</p>`;
 }
 function aboutSettings() {
-  return `<div class="about-brand"><img src="assets/leaf.svg" alt="栖页"><div><h3>栖页 Qipage</h3><p>让每次出发，都从容一点。 · v1.0.0</p></div></div><div class="help-list"><p><strong>自由布局</strong><br>点击右上角「编辑布局」，拖动组件顶部的把手移动位置，拖动右下角调整大小。桌面端保存自由布局，窄屏自动排列。</p><p><strong>快捷链接</strong><br>拖动图标调整顺序，或移动到另一个分组。悬停后点击小铅笔编辑网址；点击分组右上角管理分组。</p><p><strong>Markdown 笔记</strong><br>支持标题、列表、任务清单、引用、链接、表格和代码块。点击展开按钮并排编辑与预览，支持导入、导出 .md。</p><p><strong>键盘快捷键</strong><br><kbd>/</kbd> 搜索　<kbd>Esc</kbd> 关闭面板 / 退出专注　<kbd>Ctrl</kbd> + <kbd>S</kbd> 保存当前内容</p><p><strong>让风景动起来</strong><br>进入「壁纸与外观」选择视频壁纸，即可播放 Apple 航拍。支持自然、城市、太空与水下风景，画质可选自动、4K 或 1080p。视频静音循环，页面在后台时自动暂停。</p><p><strong>图片与视频</strong><br>图片来自 <a href="https://unsplash.com" target="_blank" rel="noopener noreferrer">Unsplash</a>，视频来自 <a href="https://www.apple.com/apple-tv-4k/" target="_blank" rel="noopener noreferrer">Apple Aerial</a>。点击左下角可访问作品与作者。</p><p><strong>数据归属</strong><br>链接、笔记和设置保存在当前浏览器。壁纸、网站图标与笔记中的远程图片由对应站点加载。浏览器扩展通过 Manifest V3 新标签页入口运行。</p></div>`;
+  return `<div class="about-brand"><img src="assets/leaf.svg" alt="栖页"><div><h3>栖页 Qipage</h3><p>让每次出发，都从容一点。 · v1.0.0</p></div></div><div class="help-list"><p><strong>自由布局</strong><br>点击右上角「编辑布局」，拖动组件顶部的把手移动位置，拖动右下角调整大小。桌面端保存自由布局，窄屏自动排列。</p><p><strong>快捷链接</strong><br>拖动图标调整顺序，或移动到另一个分组。悬停后点击小铅笔编辑网址；点击分组右上角管理分组。</p><p><strong>Markdown 笔记</strong><br>支持标题、列表、任务清单、引用、链接、表格和代码块。点击展开按钮并排编辑与预览，支持导入、导出 .md。</p><p><strong>键盘快捷键</strong><br><kbd>/</kbd> 搜索　<kbd>Esc</kbd> 关闭面板 / 退出专注　<kbd>Ctrl</kbd> + <kbd>S</kbd> 保存当前内容</p><p><strong>让风景动起来</strong><br>进入「壁纸与外观」选择视频壁纸，即可播放 Apple 航拍。支持自然、城市、太空与水下风景，画质可选自动、4K 或 1080p。视频静音循环，页面在后台时自动暂停。</p><p><strong>图片与视频</strong><br>图片来自 <a href="https://picsum.photos" target="_blank" rel="noopener noreferrer">Picsum</a>，视频来自 <a href="https://www.apple.com/apple-tv-4k/" target="_blank" rel="noopener noreferrer">Apple Aerial</a>。点击左下角可访问作品与作者。</p><p><strong>数据归属</strong><br>链接、笔记和设置保存在当前浏览器。壁纸、网站图标与笔记中的远程图片由对应站点加载。浏览器扩展通过 Manifest V3 新标签页入口运行。</p></div>`;
 }
 function toggleLayout() {
   if (!editingLayout && mobile()) { toast('自由布局适用于宽屏窗口；当前窗口使用自动平铺布局。'); return; }
@@ -610,7 +598,6 @@ document.addEventListener('click', async event => {
     if ($('.settings-nav-button.active')?.dataset.tab === 'wallpaper') settingsDialog('wallpaper');
   }
   else if (action === 'upload-wallpaper') $('#wallpaper-upload').click();
-  else if (action === 'dismiss-wallpaper-access') wallpaperAccessNotice(null);
   else if (action === 'background-type') {
     if (type === 'image' && state.settings.backgroundType === 'image' && state.wallpaper?.source === 'local-upload') return;
     if (type === 'video' && state.settings.frequency === 'period') state.settings.frequency = 'daily';
@@ -679,7 +666,6 @@ $('#wallpaper-upload').addEventListener('change', async event => {
     }
     if (requestId !== wallpaperRequest) return;
     wallpaperRetryAt = 0;
-    wallpaperAccessNotice(null);
     await displayWallpaper(state.wallpaper);
     if ($('.settings-nav-button.active')?.dataset.tab === 'wallpaper') settingsDialog('wallpaper');
     toast('本地壁纸已保存，已设为手动切换。');

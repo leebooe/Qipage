@@ -1,5 +1,6 @@
 import { AERIAL_CATEGORIES, AERIAL_QUALITIES, AERIAL_SOURCE_URL, isAerialUrl } from './aerials.js';
 import { localImage } from './local-images.js';
+import { PICSUM_SOURCE_URL, is4kPicsumImageUrl } from './picsum-source.js';
 
 export const uid = () => crypto.randomUUID();
 export const clone = value => structuredClone(value);
@@ -81,15 +82,13 @@ export function normalize(value) {
   if (wp && ['image', 'video'].includes(wp.type)) {
     try {
       const media = new URL(wp.url);
-      const allowed = wp.type === 'image' ? media.hostname === 'images.unsplash.com' : wp.source === 'apple-aerial' && isAerialUrl(wp.url);
-      const sourceUrl = wp.type === 'video' ? AERIAL_SOURCE_URL : 'https://unsplash.com';
+      const allowed = wp.type === 'image' ? wp.source === 'picsum' && is4kPicsumImageUrl(wp.url) : wp.source === 'apple-aerial' && isAerialUrl(wp.url);
+      const sourceUrl = wp.type === 'video' ? AERIAL_SOURCE_URL : PICSUM_SOURCE_URL;
       if (allowed && media.protocol === 'https:') wallpaper = { type: wp.type, url: media.href, title: short(wp.title, 160), author: short(wp.author, 100), authorUrl: safeUrl(wp.authorUrl || '') || sourceUrl, pageUrl: safeUrl(wp.pageUrl || '') || sourceUrl, downloadUrl: short(wp.downloadUrl, 500), selectedAt: bounded(wp.selectedAt, 0, Date.now(), 0) };
       if (wallpaper?.type === 'image') {
         wallpaper.period = ['morning', 'day', 'evening', 'night'].includes(wp.period) ? wp.period : '';
-        wallpaper.collectionId = short(wp.collectionId, 30);
-        if (wp.source === 'unsplash-collection') wallpaper.source = 'unsplash-collection';
-        // Retire built-in selections while keeping photos read from collection pages or the legacy API.
-        if (!wallpaper.source && !wallpaper.downloadUrl) wallpaper = null;
+        wallpaper.source = 'picsum';
+        wallpaper.id = short(wp.id, 20);
       } else if (wallpaper?.type === 'video') {
         wallpaper.source = 'apple-aerial';
         wallpaper.id = short(wp.id, 80);

@@ -2,7 +2,7 @@ import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TIME_PERIODS, collectionPhotosUrl } from '../src/wallpaper-collections.js';
+import { picsumListUrl } from '../src/picsum-source.js';
 
 const root = resolve(fileURLToPath(new URL('../', import.meta.url)));
 const port = Number(process.env.PORT || 3000);
@@ -11,22 +11,21 @@ const server = http.createServer(async (req, res) => {
   try {
     const requestUrl = new URL(req.url, 'http://localhost');
     const pathname = decodeURIComponent(requestUrl.pathname);
-    if (pathname.startsWith('/__qipage/unsplash/')) {
-      const match = /^\/__qipage\/unsplash\/collections\/([a-z\d_-]+)\/photos$/i.exec(pathname);
+    if (pathname === '/__qipage/picsum/photos') {
       const page = Number(requestUrl.searchParams.get('page') || 1);
-      if (req.method !== 'GET' || !match || !TIME_PERIODS.some(period => period.collectionId === match[1]) || !Number.isSafeInteger(page) || page < 1) {
-        res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Invalid collection request'); return;
+      if (req.method !== 'GET' || !Number.isSafeInteger(page) || page < 1) {
+        res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Invalid photo list request'); return;
       }
-      // Only forward public photo lists for the four configured collections.
+      // Only forward requests to Picsum's public photo list.
       try {
-        const upstream = await fetch(collectionPhotosUrl(match[1], page), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(18000) });
+        const upstream = await fetch(picsumListUrl(page), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(18000) });
         const body = await upstream.text();
         res.writeHead(upstream.status, {
           'Content-Type': upstream.headers.get('content-type') || 'text/plain',
           'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
         });
         res.end(body);
-      } catch { res.writeHead(502, { 'Content-Type': 'text/plain' }).end('Unsplash collection temporarily unavailable'); }
+      } catch { res.writeHead(502, { 'Content-Type': 'text/plain' }).end('Picsum photo list temporarily unavailable'); }
       return;
     }
     let filename = resolve(root, '.' + pathname);

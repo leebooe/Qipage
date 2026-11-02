@@ -1,26 +1,25 @@
-import { timePeriod } from './wallpaper-collections.js';
-import { collectionPhotos } from './unsplash-collections.js';
+import { timePeriod } from './wallpaper-periods.js';
+import { picsumPhotos } from './picsum-photos.js';
 import { chooseAerial } from './aerials.js';
 import { readCache, writeCache } from './store.js';
 import { cacheWallpaperImage, hasWallpaperImage } from './wallpaper-images.js';
-export { TIME_PERIODS, timePeriod } from './wallpaper-collections.js';
+export { timePeriod } from './wallpaper-periods.js';
 
 const preloads = new Map();
-const preparedKey = period => `qipage-prepared-wallpaper-v1-${period.collectionId}`;
+const preparedKey = period => `qipage-prepared-picsum-4k-v1-${period.id}`;
 const sameImage = (first, second) => first?.url?.split('?')[0] === second?.url?.split('?')[0];
 
 async function randomImage(period, current) {
-  const photos = await collectionPhotos(period.collectionId);
+  const photos = await picsumPhotos();
   const choices = photos.filter(photo => !sameImage(photo, current));
   const candidates = choices.length ? choices : photos;
   const photo = candidates[Math.floor(Math.random() * candidates.length)];
-  return { ...photo, type: 'image', source: 'unsplash-collection', period: period.id, collectionId: period.collectionId, title: `${period.label} · ${photo.title}`, selectedAt: Date.now() };
+  return { ...photo, type: 'image', source: 'picsum', period: period.id, selectedAt: Date.now() };
 }
 
 async function preparedImage(period, current) {
   const prepared = await readCache(preparedKey(period));
-  if (prepared?.type === 'image' && prepared.source === 'unsplash-collection'
-    && prepared.collectionId === period.collectionId && prepared.period === period.id
+  if (prepared?.type === 'image' && prepared.source === 'picsum' && prepared.period === period.id
     && Date.now() - prepared.preparedAt < 86400000 && !sameImage(prepared, current)
     && await hasWallpaperImage(prepared.url)) return prepared;
   return null;
@@ -58,7 +57,7 @@ export function isDue(settings, wallpaper, newTab = false) {
     || wallpaper.qualityPreference !== settings.aerialQuality
     || (settings.aerialCategory !== 'all' && wallpaper.category !== settings.aerialCategory))) return true;
   if (settings.frequency === 'manual') return false;
-  if (settings.backgroundType === 'image' && (wallpaper.period !== timePeriod().id || wallpaper.collectionId !== timePeriod().collectionId)) return true;
+  if (settings.backgroundType === 'image' && (wallpaper.source !== 'picsum' || wallpaper.period !== timePeriod().id)) return true;
   if (settings.frequency === 'period') return new Date(wallpaper.selectedAt).toDateString() !== new Date().toDateString();
   if (settings.frequency === 'newtab') return newTab;
   if (settings.frequency === 'daily') return new Date(wallpaper.selectedAt).toDateString() !== new Date().toDateString();
