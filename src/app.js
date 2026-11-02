@@ -57,6 +57,11 @@ function toast(message) {
   $('#toast').classList.add('visible');
   toastTimer = setTimeout(() => $('#toast').classList.remove('visible'), 4400);
 }
+function wallpaperAccessNotice(error) {
+  const notice = $('#wallpaper-access-notice');
+  notice.hidden = !error;
+  notice.innerHTML = error ? `<strong>Unsplash 暂时限制了图片访问</strong><p>在当前浏览器打开图片来源，查看并完成站点提示后，回到这里重试。</p><div class="image-upload-row"><a class="secondary-button" href="${escape(error.accessUrl)}" target="_blank" rel="noopener noreferrer">打开图片来源 ↗</a><button class="primary-button" data-action="refresh-wallpaper">重试</button><button class="text-button" data-action="dismiss-wallpaper-access">收起</button></div>` : '';
+}
 async function persist() {
   clearTimeout(savingTimer);
   savingTimer = null;
@@ -209,6 +214,7 @@ function updateThemeColor(color) {
   saveSoon();
 }
 async function displayWallpaper(wallpaper, startAt = 0) {
+  if (wallpaper?.source === 'local-upload' || wallpaper?.type === 'video') wallpaperAccessNotice(null);
   const generation = ++wallpaperGeneration;
   const image = $('#wallpaper-image'), video = $('#wallpaper-video');
   const credit = $('#wallpaper-credit');
@@ -340,9 +346,21 @@ async function nextWallpaper(keepFilm = false) {
       ? await prepareAerial(state.wallpaper, settings) : await chooseWallpaper(settings, state.wallpaper);
     if (requestId !== wallpaperRequest || settings.backgroundType !== state.settings.backgroundType || settings.aerialCategory !== state.settings.aerialCategory || settings.aerialQuality !== state.settings.aerialQuality || settings.frequency !== state.settings.frequency || (settings.backgroundType === 'image' && period !== timePeriod().id)) return;
     wallpaperRetryAt = 0;
+    wallpaperAccessNotice(null);
     state.wallpaper = next; await persist();
     if (requestId === wallpaperRequest) await displayWallpaper(next);
-  } catch (error) { if (requestId === wallpaperRequest) { wallpaperRetryAt = Date.now() + 300000; toast(error.message || '连接壁纸服务失败，请稍后再试。'); } }
+  } catch (error) {
+    if (requestId === wallpaperRequest) {
+      if (error.code === 'unsplash-access') {
+        // Wait for an explicit retry while the user deals with the site's access prompt.
+        wallpaperRetryAt = Infinity;
+        wallpaperAccessNotice(error);
+      } else {
+        wallpaperRetryAt = Date.now() + 300000;
+        toast(error.message || '连接壁纸服务失败，请稍后再试。');
+      }
+    }
+  }
   finally { if (requestId === wallpaperRequest) document.body.classList.remove('busy'); }
 }
 function closeModal() {
@@ -592,6 +610,7 @@ document.addEventListener('click', async event => {
     if ($('.settings-nav-button.active')?.dataset.tab === 'wallpaper') settingsDialog('wallpaper');
   }
   else if (action === 'upload-wallpaper') $('#wallpaper-upload').click();
+  else if (action === 'dismiss-wallpaper-access') wallpaperAccessNotice(null);
   else if (action === 'background-type') {
     if (type === 'image' && state.settings.backgroundType === 'image' && state.wallpaper?.source === 'local-upload') return;
     if (type === 'video' && state.settings.frequency === 'period') state.settings.frequency = 'daily';
@@ -660,6 +679,7 @@ $('#wallpaper-upload').addEventListener('change', async event => {
     }
     if (requestId !== wallpaperRequest) return;
     wallpaperRetryAt = 0;
+    wallpaperAccessNotice(null);
     await displayWallpaper(state.wallpaper);
     if ($('.settings-nav-button.active')?.dataset.tab === 'wallpaper') settingsDialog('wallpaper');
     toast('本地壁纸已保存，已设为手动切换。');

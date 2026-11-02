@@ -4,6 +4,13 @@ import { collectionPhotosUrl } from './wallpaper-collections.js';
 const CACHE_TTL = 86400000;
 const RETRY_DELAY = 300000;
 
+function accessError(url) {
+  const error = new Error('Unsplash 暂时限制了图片访问，请打开图片来源查看站点提示，再回来重试。');
+  error.code = 'unsplash-access';
+  error.accessUrl = url;
+  return error;
+}
+
 function photoDetails(photo) {
   try {
     const url = new URL(photo.urls?.raw || photo.urls?.full);
@@ -31,10 +38,14 @@ async function readPage(collectionId, page) {
     headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(18000),
   });
   if (response.status === 404 && page > 1) return [];
-  if (response.status === 401 || response.status === 403) throw new Error('Unsplash 正在校验访问，请先在浏览器打开对应合集，再回来换一张。');
+  if (response.status === 401 || response.status === 403) throw accessError(remoteUrl.href);
   if (response.status === 429) throw new Error('Unsplash 暂时限制了请求频率，请稍后再试。');
   if (!response.ok) throw new Error(`合集暂时无法读取（${response.status}），请稍后再试。`);
-  if (!response.headers.get('content-type')?.includes('json')) throw new Error('Unsplash 正在校验访问，请先在浏览器打开对应合集，再回来换一张。');
+  if (!response.headers.get('content-type')?.includes('json')) {
+    const body = await response.text();
+    if (/anubis|checking your browser|verify you are human|captcha|challenge-platform|检查您的浏览器/i.test(body)) throw accessError(remoteUrl.href);
+    throw new Error('Unsplash 返回了网页内容，图片列表暂时无法读取，请稍后重试。');
+  }
   const photos = await response.json();
   if (!Array.isArray(photos)) throw new Error('合集图片列表暂时无法解析，请稍后再试。');
   return photos;
