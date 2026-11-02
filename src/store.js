@@ -1,4 +1,5 @@
 import { AERIAL_CATEGORIES, AERIAL_QUALITIES, AERIAL_SOURCE_URL, isAerialUrl } from './aerials.js';
+import { localImage } from './local-images.js';
 
 export const uid = () => crypto.randomUUID();
 export const clone = value => structuredClone(value);
@@ -65,7 +66,7 @@ export function normalize(value) {
   const unique = value => { let id = short(value, 80); if (!/^[a-z\d-]+$/i.test(id) || ids.has(id)) id = uid(); ids.add(id); return id; };
   const groups = value.groups.slice(0, 30).filter(g => g && typeof g === 'object').map(g => ({
     id: unique(g.id), name: short(g.name, 40, '新分组'), subtitle: short(g.subtitle, 40),
-    links: (Array.isArray(g.links) ? g.links : []).slice(0, 150).filter(l => l && typeof l.url === 'string' && safeUrl(l.url)).map(l => ({ id: unique(l.id), title: short(l.title, 40, '快捷链接'), url: safeUrl(l.url), color: /^#[a-f\d]{6}$/i.test(l.color) ? l.color : '#53794e' })),
+    links: (Array.isArray(g.links) ? g.links : []).slice(0, 150).filter(l => l && typeof l.url === 'string' && safeUrl(l.url)).map(l => ({ id: unique(l.id), title: short(l.title, 40, '快捷链接'), url: safeUrl(l.url), color: /^#[a-f\d]{6}$/i.test(l.color) ? l.color : '#53794e', icon: localImage(l.icon, 'icon') })),
   }));
   const notes = value.notes.slice(0, 100).filter(n => n && typeof n.content === 'string').map(n => ({ id: unique(n.id), title: short(n.title, 80, '未命名笔记'), content: n.content.slice(0, 100000), updatedAt: bounded(n.updatedAt, 0, Date.now(), Date.now()) }));
   const layout = {};
@@ -98,6 +99,10 @@ export function normalize(value) {
         if (!wallpaper.id) wallpaper = null;
       }
     } catch { /* A damaged wallpaper is replaced by the next online selection. */ }
+  }
+  if (wp?.type === 'image' && wp.source === 'local-upload') {
+    const url = localImage(wp.url);
+    wallpaper = url ? { type: 'image', source: 'local-upload', url, title: short(wp.title, 160, '本地壁纸'), selectedAt: bounded(wp.selectedAt, 0, Date.now(), 0) } : null;
   }
   return { version: 1, settings, groups, notes, layout, layoutSpace, wallpaper, activeNote: notes.some(n => n.id === value.activeNote) ? value.activeNote : notes[0]?.id || '' };
 }

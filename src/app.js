@@ -1,6 +1,8 @@
 import { icon, hydrateIcons } from './icons.js';
 import { defaults, DEFAULT_LAYOUT, SETTINGS, uid, clone, safeUrl, normalize, readState, writeState, watchState } from './store.js';
-import { timePeriod, chooseWallpaper, isDue } from './wallpapers.js';
+import { timePeriod, chooseWallpaper, preloadNextWallpaper, isDue } from './wallpapers.js';
+import { wallpaperImage, forgetWallpaperImage } from './wallpaper-images.js';
+import { uploadedImage } from './local-images.js';
 import { AERIAL_CATEGORIES, AERIAL_QUALITIES, AERIAL_SOURCE_URL, prepareAerial, lowerAerial } from './aerials.js';
 
 const $ = (query, root = document) => root.querySelector(query);
@@ -12,6 +14,7 @@ let editingLayout = false;
 let noteMode = 'preview';
 let savingTimer, toastTimer, modalFocus, videoLoadTimer, wallpaperGeneration = 0;
 let wallpaperRetryAt = 0, wallpaperRequest = 0;
+let releaseWallpaperImage = () => {};
 let dragState = null, pendingExternal = null;
 let lastDate = '';
 const workspace = $('#workspace');
@@ -64,7 +67,7 @@ async function persist() {
     if ($('#full-note-status')) $('#full-note-status').textContent = `已保存到本机 · ${currentNote()?.content.length || 0} 字`;
     return true;
   }
-  catch { toast('本机存储空间不足，请导出备份并清理较长的笔记。'); return false; }
+  catch { toast('本机存储空间不足，请导出备份，并减少笔记或上传图片的大小。'); return false; }
 }
 function saveSoon() { clearTimeout(savingTimer); savingTimer = setTimeout(persist, 350); }
 function currentNote() { return state.notes.find(n => n.id === state.activeNote) || state.notes[0]; }
@@ -100,7 +103,7 @@ function renderGroup(group) {
   return widget(`group-${group.id}`, 'group', `<div class="glass-card" style="height:100%"><div class="card-heading"><span class="heading-symbol">${icon('folder')}</span><div class="card-titles"><h2>${escape(group.name)}</h2><div class="eyebrow">${escape(group.subtitle || 'MY COLLECTION')}</div></div><button class="icon-button" data-action="edit-group" data-id="${escape(group.id)}" aria-label="编辑${escape(group.name)}" title="编辑分组">${icon('more')}</button></div><div class="group-links" data-group="${escape(group.id)}">${group.links.map(link => renderLink(link, group.id)).join('')}<button class="shortcut" data-action="new-link" data-group="${escape(group.id)}" title="添加快捷链接"><span class="shortcut-icon shortcut-add">${icon('plus')}</span><span class="shortcut-label">添加</span></button></div></div>`, group.name);
 }
 function renderLink(link, groupId) {
-  return `<div class="shortcut" draggable="true" data-link="${escape(link.id)}" data-group="${escape(groupId)}"><a href="${escape(link.url)}" ${state.settings.newTab ? 'target="_blank" rel="noopener noreferrer"' : ''} class="shortcut-icon" style="--link-color:${escape(link.color)}" title="${escape(link.title)} · ${escape(new URL(link.url).hostname)}"><span>${escape(link.title.slice(0, 1).toUpperCase())}</span><img data-favicon="${escape(link.url)}" alt="" referrerpolicy="no-referrer" loading="lazy"></a><span class="shortcut-label">${escape(link.title)}</span><button class="shortcut-edit" data-action="edit-link" data-id="${escape(link.id)}" data-group="${escape(groupId)}" aria-label="编辑${escape(link.title)}">${icon('edit')}</button></div>`;
+  return `<div class="shortcut" draggable="true" data-link="${escape(link.id)}" data-group="${escape(groupId)}"><a href="${escape(link.url)}" ${state.settings.newTab ? 'target="_blank" rel="noopener noreferrer"' : ''} class="shortcut-icon" style="--link-color:${escape(link.color)}" title="${escape(link.title)} · ${escape(new URL(link.url).hostname)}"><span>${escape(link.title.slice(0, 1).toUpperCase())}</span><img data-favicon="${escape(link.url)}" ${link.icon ? `data-custom-icon="${escape(link.icon)}"` : ''} alt="" referrerpolicy="no-referrer" loading="lazy"></a><span class="shortcut-label">${escape(link.title)}</span><button class="shortcut-edit" data-action="edit-link" data-id="${escape(link.id)}" data-group="${escape(groupId)}" aria-label="编辑${escape(link.title)}">${icon('edit')}</button></div>`;
 }
 function attachFavicons() {
   $$('img[data-favicon]', workspace).forEach(img => {
@@ -114,7 +117,7 @@ function attachFavicons() {
       if (!fallback && img.src !== remote) { fallback = true; img.src = remote; }
       else img.remove();
     });
-    img.src = globalThis.chrome?.runtime?.id ? `${chrome.runtime.getURL('_favicon/')}?pageUrl=${encodeURIComponent(url)}&size=64` : remote;
+    img.src = img.dataset.customIcon || (globalThis.chrome?.runtime?.id ? `${chrome.runtime.getURL('_favicon/')}?pageUrl=${encodeURIComponent(url)}&size=64` : remote);
   });
 }
 function renderNotes(note) {
@@ -214,6 +217,7 @@ async function displayWallpaper(wallpaper, startAt = 0) {
   if (!wallpaper) {
     video.pause(); video.onloadeddata = null; video.onerror = null; video.removeAttribute('src'); video.load(); video.style.display = 'none';
     image.style.removeProperty('background-image');
+    releaseWallpaperImage(); releaseWallpaperImage = () => {};
     $('#video-toggle').hidden = true;
     credit.innerHTML = `${icon('image')}<button data-action="next-wallpaper">从当前来源获取背景</button>`;
     return;
@@ -238,7 +242,9 @@ async function displayWallpaper(wallpaper, startAt = 0) {
   const sourceUrl = wallpaper.type === 'video' ? AERIAL_SOURCE_URL : 'https://unsplash.com/?utm_source=qipage&utm_medium=referral';
   // Attribution uses separate photographer and provider links.
   credit.removeAttribute('href');
-  credit.innerHTML = `${icon(wallpaper.type === 'video' ? 'video' : 'image')}<span><a href="${escape(wallpaper.pageUrl || sourceUrl)}" target="_blank" rel="noopener noreferrer">${escape(wallpaper.title || '自然之境')}</a>${wallpaper.author ? ` · <a href="${escape(wallpaper.authorUrl)}" target="_blank" rel="noopener noreferrer">${escape(wallpaper.author)}</a>` : ''} / <a href="${sourceUrl}" target="_blank" rel="noopener noreferrer">${source}</a></span>`;
+  credit.innerHTML = wallpaper.source === 'local-upload'
+    ? `${icon('image')}<span>${escape(wallpaper.title || '我的壁纸')} · 本地壁纸</span>`
+    : `${icon(wallpaper.type === 'video' ? 'video' : 'image')}<span><a href="${escape(wallpaper.pageUrl || sourceUrl)}" target="_blank" rel="noopener noreferrer">${escape(wallpaper.title || '自然之境')}</a>${wallpaper.author ? ` · <a href="${escape(wallpaper.authorUrl)}" target="_blank" rel="noopener noreferrer">${escape(wallpaper.author)}</a>` : ''} / <a href="${sourceUrl}" target="_blank" rel="noopener noreferrer">${source}</a></span>`;
   $('#video-toggle').hidden = wallpaper.type !== 'video';
   if (wallpaper.type === 'video') {
     video.preload = 'auto';
@@ -290,11 +296,28 @@ async function displayWallpaper(wallpaper, startAt = 0) {
     if (video.readyState >= 2) video.onloadeddata();
   } else {
     video.pause(); video.onloadeddata = null; video.onerror = null; video.removeAttribute('src'); video.load(); video.style.display = 'none';
+    let asset = await wallpaperImage(wallpaper.url);
+    if (generation !== wallpaperGeneration) { asset.release(); return; }
     const preload = new Image();
     preload.referrerPolicy = 'no-referrer';
-    preload.onload = () => { if (generation === wallpaperGeneration) image.style.backgroundImage = `url("${wallpaper.url.replace(/["\\\n\r]/g, '')}")`; };
-    preload.onerror = () => { if (generation === wallpaperGeneration) toast('壁纸暂时无法加载，当前背景会继续陪伴你。'); };
-    preload.src = wallpaper.url;
+    preload.onload = () => {
+      if (generation !== wallpaperGeneration) { asset.release(); return; }
+      image.style.backgroundImage = `url("${asset.url.replace(/["\\\n\r]/g, '')}")`;
+      releaseWallpaperImage(); releaseWallpaperImage = asset.release;
+      void preloadNextWallpaper(wallpaper).catch(() => { /* A later switch can retry preloading. */ });
+    };
+    preload.onerror = () => {
+      asset.release();
+      if (generation !== wallpaperGeneration) return;
+      if (asset.url.startsWith('blob:')) {
+        void forgetWallpaperImage(wallpaper.url);
+        asset = { url: wallpaper.url, release() {} };
+        preload.src = asset.url;
+        return;
+      }
+      toast('壁纸暂时无法加载，当前背景会继续陪伴你。');
+    };
+    preload.src = asset.url;
   }
 }
 function updateVideoButton() {
@@ -306,7 +329,8 @@ function updateVideoButton() {
 async function nextWallpaper(keepFilm = false) {
   document.body.classList.add('busy');
   const requestId = ++wallpaperRequest;
-  ++wallpaperGeneration;
+  // Keep loading the saved picture while its replacement is being selected.
+  if (state.settings.backgroundType === 'video' || state.wallpaper?.type === 'video') ++wallpaperGeneration;
   clearTimeout(videoLoadTimer);
   try {
     const settings = { ...state.settings };
@@ -344,8 +368,33 @@ function linkDialog(groupId, linkId) {
   const group = state.groups.find(g => g.id === groupId) || state.groups[0];
   const link = group.links.find(l => l.id === linkId);
   modal(`${modalHeader(link ? '编辑快捷链接' : '添加快捷链接', 'link')}<form id="link-form" class="modal-body"><p class="modal-subtitle">填写网址，栖页会自动获取网站图标。</p><label class="form-field"><span>名称</span><input name="title" placeholder="例如：我的灵感库" required maxlength="40" value="${escape(link?.title || '')}"></label><label class="form-field"><span>网址</span><input name="url" placeholder="https://example.com" required maxlength="2000" value="${escape(link?.url || '')}" autocomplete="url"><small>支持 HTTPS 与 HTTP 网址。</small></label><label class="form-field"><span>所在分组</span><select name="group">${state.groups.map(g => `<option value="${escape(g.id)}" ${g.id === group.id ? 'selected' : ''}>${escape(g.name)}</option>`).join('')}</select></label><label class="form-field"><span>图标底色</span><div class="color-field"><input type="color" name="color" value="${escape(link?.color || '#53794e')}"><div class="color-swatches">${['#53794e', '#46a8b2', '#292d34', '#eae9e5', '#c84751', '#d8789f'].map(color => `<button type="button" class="color-swatch" data-color="${color}" style="--swatch:${color}" aria-label="选择颜色 ${color}"></button>`).join('')}</div></div></label><div class="form-error" role="alert"></div><div class="form-actions">${link ? `<button type="button" class="danger-button" data-action="delete-link" data-id="${escape(link.id)}" data-group="${escape(group.id)}">${icon('trash')}删除</button>` : ''}<button type="button" class="secondary-button" data-action="close">取消</button><button type="submit" class="primary-button">保存链接</button></div></form>`);
-  $('#link-form').addEventListener('submit', async event => {
+  const form = $('#link-form');
+  $('.modal-subtitle', form).textContent = '填写网址自动获取网站图标，也可以上传自己的图标。';
+  let customIcon = link?.icon || '', uploadVersion = 0, savingLink = false;
+  const saveButton = $('button[type="submit"]', form);
+  $('input[name="color"]', form).closest('.form-field').insertAdjacentHTML('afterend', `<div class="form-field"><span>自定义图标</span><div class="image-upload-row"><div class="custom-icon-preview" id="custom-icon-preview"></div><button type="button" class="secondary-button" id="choose-link-icon">${icon('upload')}上传图标</button><button type="button" class="text-button" id="reset-link-icon">恢复网站图标</button></div><small>支持 PNG、JPG、WebP、SVG 和 ICO，自动调整尺寸并保存到本机。</small><input type="file" id="link-icon-upload" accept="image/*,.ico" hidden></div>`);
+  const showIcon = () => {
+    $('#custom-icon-preview', form).innerHTML = customIcon ? `<img src="${escape(customIcon)}" alt="自定义图标预览">` : icon('image');
+    $('#reset-link-icon', form).disabled = !customIcon;
+  };
+  showIcon();
+  $('#choose-link-icon', form).addEventListener('click', () => $('#link-icon-upload', form).click());
+  $('#reset-link-icon', form).addEventListener('click', () => { uploadVersion++; customIcon = ''; saveButton.disabled = false; showIcon(); });
+  $('#link-icon-upload', form).addEventListener('change', async event => {
+    const file = event.target.files[0]; event.target.value = ''; if (!file || savingLink) return;
+    const version = ++uploadVersion;
+    saveButton.disabled = true;
+    $('.form-error', form).textContent = '';
+    try {
+      const data = await uploadedImage(file, 'icon');
+      if (!form.isConnected || version !== uploadVersion) return;
+      customIcon = data; showIcon();
+    } catch (error) { if (form.isConnected && version === uploadVersion) $('.form-error', form).textContent = error.message; }
+    finally { if (form.isConnected && version === uploadVersion) saveButton.disabled = false; }
+  });
+  form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (saveButton.disabled || savingLink) return;
     const data = new FormData(event.currentTarget), url = safeUrl(data.get('url'));
     if (!url) { $('.form-error', event.currentTarget).textContent = '请输入有效网址，例如 https://example.com。'; return; }
     const target = state.groups.find(g => g.id === data.get('group'));
@@ -353,11 +402,16 @@ function linkDialog(groupId, linkId) {
     const title = data.get('title').trim();
     if (!title) { $('.form-error', event.currentTarget).textContent = '请为链接填写名称。'; return; }
     const previousIndex = link ? group.links.findIndex(l => l.id === link.id) : -1;
+    const previousGroupLinks = group.links, previousTargetLinks = target.links;
     if (link) group.links = group.links.filter(l => l.id !== link.id);
-    const updatedLink = { id: link?.id || uid(), title, url, color: data.get('color') };
+    target.links = [...target.links];
+    const updatedLink = { id: link?.id || uid(), title, url, color: data.get('color'), icon: customIcon };
     if (link && target.id === group.id) target.links.splice(previousIndex, 0, updatedLink);
     else target.links.push(updatedLink);
+    savingLink = true; saveButton.disabled = true;
     if (await persist()) { closeModal(); renderWorkspace(); toast('快捷链接已保存'); }
+    else { group.links = previousGroupLinks; target.links = previousTargetLinks; }
+    savingLink = false; saveButton.disabled = false;
   });
 }
 function groupDialog(id) {
@@ -451,15 +505,16 @@ function themeColorSetting() {
 function wallpaperSettings() {
   const s = state.settings;
   const imageMode = s.backgroundType === 'image';
+  const localWallpaper = imageMode && state.wallpaper?.source === 'local-upload';
   const frequencies = [...(imageMode ? [['period', '跟随时间自动切换']] : []), ['daily', imageMode ? '每天与时段变化时' : '每天一次'], ['newtab', '每次打开新标签页'], ['hourly', '每小时'], ['1800', '每 30 分钟'], ['900', '每 15 分钟'], ['300', '每 5 分钟'], ['manual', '手动切换']];
   const refreshLabel = imageMode ? '换一张图片' : '换一段航拍';
   return `<p class="modal-subtitle">让风景，随着一天的光线慢慢变化。</p>
     ${themeColorSetting()}<div class="settings-separator"></div>
     <div class="segmented"><button class="${imageMode ? 'active' : ''}" data-action="background-type" data-type="image">${icon('image')}图片壁纸</button><button class="${imageMode ? '' : 'active'}" data-action="background-type" data-type="video">${icon('video')}视频壁纸</button></div>
-    ${imageMode ? `<div class="status-pill">${icon('image')}Unsplash · 自动获取图片</div>` : `<div class="status-pill">${icon('video')}Apple Aerial · 114 段风景影片</div><p class="field-hint">选择即可播放，影片由 Apple 直接提供。静音循环，后台自动暂停。</p>`}
+    ${imageMode ? `<div class="status-pill">${icon('image')}${localWallpaper ? '本地壁纸' : 'Unsplash · 自动获取图片'}</div>${localWallpaper ? `<p class="field-hint">当前：${escape(state.wallpaper.title)}。已固定为手动切换，选择自动频率或换图可恢复在线背景。</p>` : ''}` : `<div class="status-pill">${icon('video')}Apple Aerial · 114 段风景影片</div><p class="field-hint">选择即可播放，影片由 Apple 直接提供。静音循环，后台自动暂停。</p>`}
     ${selectSetting('frequency', '自动切换频率', frequencies)}
     ${imageMode ? '<p class="field-hint">自动模式按所选规则更新背景。手动模式保留当前图片，点击换图可随机选取另一张。</p>' : `${selectSetting('aerialCategory', '风景分类', AERIAL_CATEGORIES)}${selectSetting('aerialQuality', '航拍画质', AERIAL_QUALITIES)}<p class="field-hint">自动模式优先播放设备支持的 4K，加载失败时切换到同一段的 1080p。4K 约需 12 Mbps，1080p 约需 10 Mbps。</p>`}
-    <button class="secondary-button" data-action="refresh-wallpaper">${icon('shuffle')}${refreshLabel}</button>
+    <div class="image-upload-row"><button class="secondary-button" data-action="refresh-wallpaper">${icon('shuffle')}${refreshLabel}</button>${imageMode ? `<button class="secondary-button" data-action="upload-wallpaper">${icon('upload')}上传本地壁纸</button>` : ''}</div>
     <div class="settings-separator"></div><div class="section-label">让画面刚刚好</div>${rangeSetting('brightness', '壁纸亮度')}${rangeSetting('opacity', '壁纸不透明度')}${rangeSetting('cardOpacity', '卡片不透明度')}${rangeSetting('blur', '卡片背景模糊', 30, ' px')}
     <div class="settings-save-info">${icon('check')}设置自动保存</div>`;
 }
@@ -534,8 +589,11 @@ document.addEventListener('click', async event => {
   else if (action === 'reset-layout') { resetLayout(); await persist(); applyLayout(); toast('已恢复默认布局'); }
   else if (action === 'next-wallpaper' || action === 'refresh-wallpaper') {
     target.disabled = true; await nextWallpaper(); if (target.isConnected) target.disabled = false;
+    if ($('.settings-nav-button.active')?.dataset.tab === 'wallpaper') settingsDialog('wallpaper');
   }
+  else if (action === 'upload-wallpaper') $('#wallpaper-upload').click();
   else if (action === 'background-type') {
+    if (type === 'image' && state.settings.backgroundType === 'image' && state.wallpaper?.source === 'local-upload') return;
     if (type === 'video' && state.settings.frequency === 'period') state.settings.frequency = 'daily';
     state.settings.backgroundType = type; await persist(); settingsDialog('wallpaper');
     await nextWallpaper();
@@ -578,6 +636,37 @@ document.addEventListener('input', event => {
 document.addEventListener('change', event => {
   if (event.target.id === 'note-selector') { state.activeNote = event.target.value; refreshNotes(); saveSoon(); }
   if (event.target.matches('.search-engine')) { state.settings.searchEngine = event.target.value; saveSoon(); }
+});
+
+$('#wallpaper-upload').addEventListener('change', async event => {
+  const file = event.target.files[0]; event.target.value = ''; if (!file) return;
+  const requestId = ++wallpaperRequest;
+  ++wallpaperGeneration;
+  clearTimeout(videoLoadTimer);
+  document.body.classList.add('busy');
+  try {
+    const url = await uploadedImage(file);
+    if (requestId !== wallpaperRequest) return;
+    const previous = { wallpaper: state.wallpaper, backgroundType: state.settings.backgroundType, frequency: state.settings.frequency };
+    state.wallpaper = { type: 'image', source: 'local-upload', url, title: file.name.slice(0, 160), selectedAt: Date.now() };
+    state.settings.backgroundType = 'image';
+    state.settings.frequency = 'manual';
+    if (!await persist()) {
+      if (requestId === wallpaperRequest) {
+        state.wallpaper = previous.wallpaper; state.settings.backgroundType = previous.backgroundType; state.settings.frequency = previous.frequency;
+        await displayWallpaper(state.wallpaper);
+      }
+      return;
+    }
+    if (requestId !== wallpaperRequest) return;
+    wallpaperRetryAt = 0;
+    await displayWallpaper(state.wallpaper);
+    if ($('.settings-nav-button.active')?.dataset.tab === 'wallpaper') settingsDialog('wallpaper');
+    toast('本地壁纸已保存，已设为手动切换。');
+  } catch (error) {
+    if (requestId === wallpaperRequest) { void displayWallpaper(state.wallpaper); toast(error.message || '图片上传失败，请重新选择。'); }
+  }
+  finally { if (requestId === wallpaperRequest) document.body.classList.remove('busy'); }
 });
 document.addEventListener('submit', event => {
   if (event.target.id !== 'search-form') return;
