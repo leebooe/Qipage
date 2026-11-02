@@ -13,7 +13,7 @@ Chrome 和 Edge 使用相同目录。扩展代码更新后，在扩展管理页�
 
 ## 已实现的功能
 
-- **自然壁纸**：直接读取早晨、白天、傍晚、夜间四个 Unsplash 合集的公开图片，按本地时段和切换规则随机选取背景。完整图片列表分页读取并缓存 24 小时，候选范围随合集内容更新。配置 Pixabay API Key 后按关键词获取视频壁纸。视频静音循环，后台暂停，尊重减少动态效果的系统偏好。
+- **自然壁纸**：直接读取早晨、白天、傍晚、夜间四个 Unsplash 合集的公开图片，按本地时段和切换规则随机选取背景。完整图片列表分页读取并缓存 24 小时，候选范围随合集内容更新。视频壁纸使用 Apple 的 114 段航拍影片，可按自然、城市、太空和水下分类选择，支持自动画质、4K SDR 与 1080p。视频静音循环，后台暂停，尊重减少动态效果的系统偏好。
 - **外观调节**：主题色支持 6 种预设、自定义取色与恢复默认，即时更新按钮、选中状态和面板配色并自动保存；支持壁纸亮度、壁纸不透明度、卡片不透明度、卡片背景模糊。
 - **自动切换**：图片默认跟随四个时段；支持每天、每次新建标签页、每小时、30 / 15 / 5 分钟轮换。自动模式在时段变化时更新图片；手动模式保留当前背景，每次点击换图时从当前时段完整合集重新获取。
 - **时间与陪伴**：本机时间、日期、星期、12 / 24 小时制、秒数、个性化时段问候。每日暖心短句按本地日期轮换。
@@ -22,7 +22,7 @@ Chrome 和 Edge 使用相同目录。扩展代码更新后，在扩展管理页�
 - **Markdown 笔记**：多篇笔记、自动保存、编辑 / 预览、全尺寸并排实时预览、任务清单、表格、代码块、Markdown 文件导入与导出。预览经 DOMPurify 清理。
 - **搜索**：Bing、Google、百度、DuckDuckGo；可直接输入网址。
 - **专注模式**：收起工具和卡片，保留时间与每日一句。
-- **备份恢复**：JSON 导出与导入，恢复前展示数据数量并确认。备份会省略 API 密钥，恢复时保留当前浏览器的密钥。
+- **备份恢复**：JSON 导出与导入，恢复前展示数据数量并确认。备份包含链接、笔记、布局、外观以及航拍分类与画质设置。
 
 ## 壁纸来源与视频配置
 
@@ -47,13 +47,15 @@ Unsplash 出现站点访问校验时，可在浏览器打开对应合集后回�
 
 页面在前台时每 30 秒处理自动切换，恢复到前台时立即匹配当前时段。手动模式保留所选图片，点击「换一张图片」会从当前时段完整合集重新获取图片。设置面板提供自动切换频率和换图按钮，后台按本地时段选择对应合集。
 
-### Pixabay
+### Apple 航拍
 
-在 [Pixabay API 文档](https://pixabay.com/api/docs/) 登录并获取 **API Key**。选择「视频壁纸」后，在「视频 API 配置」中填写密钥，输入主题并切换壁纸。
+选择「视频壁纸」即可使用，提供「全部风景」「自然风光」「城市航拍」「太空俯瞰」「水下世界」五种分类。沿用现有自动切换频率，点击「换一段航拍」会从当前分类随机选择另一段影片。
 
-同一密钥与主题的 API 搜索结果缓存 24 小时。换壁纸从缓存池中选择另一段视频；缓存过期后更新。视频媒体从 Pixabay CDN 直接加载。
+`assets/aerials.json` 内置 114 段影片的地址、分类及中英文地点说明，来自 [aerial-tv 的航拍目录](https://github.com/pengchujin/aerial-tv/blob/9ffa2c309c8b4fbfe292e926fa6a083829cbd8cf/app/src/main/assets/aerials.json)，上游由 [Apple 官方资源包](https://sylvan.apple.com/Aerials/resources-16.tar) 生成。影片通过 HTTPS 从 `sylvan.apple.com` 直接加载，分段读取和媒体缓存由浏览器管理。目录随扩展发布更新，来源声明见 `vendor/aerial-tv-LICENSE.txt`。
 
-密钥存于当前浏览器扩展存储，适用于个人本地安装。发布面向公众的版本时，建议通过自有服务管理统一密钥和服务配额。
+画质可选「自动 · 优先 4K」「4K SDR · HEVC」「1080p · H.264」。通过浏览器的 Media Capabilities 和媒体类型支持检测判断 4K HEVC 播放能力；自动与 4K 选项在设备兼容时使用 4K SDR（约 12 Mbps），兼容性回退使用 1080p H.264（约 10 Mbps）。4K 加载失败或前台等待首帧超过 25 秒时，切到同一段的 1080p，并在当前页面会话优先使用 1080p。1080p 加载失败时保留图片背景，提供换片提示。壁纸使用 SDR 格式。
+
+旧版本视频设置会迁移到 Apple 航拍，原有链接、笔记、布局和图片壁纸继续保留。
 
 ## 操作方式
 
@@ -73,9 +75,9 @@ Unsplash 出现站点访问校验时，可在浏览器打开对应合集后回�
 
 ## 数据与隐私
 
-- 扩展以 `chrome.storage.local` 保存链接、笔记、布局、设置和密钥，容量受浏览器本地存储配额限制；网页预览使用当前来源的 `localStorage`。
+- 扩展以 `chrome.storage.local` 保存链接、笔记、布局和设置，容量受浏览器本地存储配额限制；网页预览使用当前来源的 `localStorage`。
 - 不同浏览器和用户配置文件各自保存数据，可通过 JSON 备份迁移。
-- 图片列表从 Unsplash 合集网页读取，图片从 Unsplash 图片 CDN 加载；Pixabay 视频请求将视频密钥发送给 Pixabay。
+- 图片列表从 Unsplash 合集网页读取，图片从 Unsplash 图片 CDN 加载；航拍影片直接从 Apple 视频服务器加载。
 - 网站图标优先使用浏览器 favicon 接口；网页预览与加载失败时使用 Google favicon 服务，该服务会接收目标网站域名。
 - 笔记中主动插入的 HTTPS 图片由对应远程服务器加载。Markdown 外链通过独立标签页打开。
 - 卸载扩展会清除相应扩展存储，建议定期导出备份。
@@ -103,17 +105,18 @@ index.html              页面壳与导航
 styles.css              响应式外观与布局
 src/app.js              组件、编辑、拖拽、设置、笔记与备份
 src/store.js            数据结构、导入规范化、本地持久化
-src/wallpapers.js       Unsplash / Pixabay、缓存与轮换
+src/wallpapers.js       图片 / 航拍选择与轮换规则
+src/aerials.js          Apple 航拍目录、分类、画质检测与回退
 src/wallpaper-collections.js 四个时段与完整合集来源
 src/unsplash-collections.js 公开合集分页读取、图片整理与缓存
 src/icons.js            本地 SVG 图标
-assets/                 品牌图标与本地资源
+assets/                 品牌图标、本地资源与 aerials.json 航拍目录
 vendor/                 本地 Markdown 与 HTML 清理依赖及许可证
 scripts/dev-server.mjs  使用 Node 标准库的本地预览服务
 scripts/create-icons.mjs 从项目原生叶片矢量生成扩展 PNG 图标
 ```
 
-Manifest 申请 `storage`、`favicon`、Unsplash 网页及 Pixabay 视频 API 的主机权限。JavaScript 依赖随扩展打包，本地加载。
+Manifest 申请 `storage`、`favicon`、Unsplash 网页及 Apple 视频服务器的主机权限。JavaScript 依赖随扩展打包，本地加载。
 
 ## 资料
 
@@ -121,8 +124,10 @@ Manifest 申请 `storage`、`favicon`、Unsplash 网页及 Pixabay 视频 API �
 - [Chrome：获取网站图标](https://developer.chrome.com/docs/extensions/how-to/ui/favicons)
 - [Microsoft Edge：Chrome 扩展兼容](https://learn.microsoft.com/en-us/microsoft-edge/extensions-chromium/developer-guide/port-chrome-extension)
 - [Unsplash](https://unsplash.com/)
-- [Pixabay API](https://pixabay.com/api/docs/)
+- [Apple TV 4K](https://www.apple.com/apple-tv-4k/)
+- [aerial-tv](https://github.com/pengchujin/aerial-tv)，MIT License
 - [Marked](https://marked.js.org/)，MIT License
 - [DOMPurify](https://github.com/cure53/DOMPurify)，Apache-2.0 / MPL-2.0
 
 图片版权归摄影师所有。内置森林图：Sebastian Unrau / Unsplash。
+航拍目录保留 aerial-tv 的 MIT 版权声明；航拍影片由 Apple 提供，影片版权归相应权利人所有。

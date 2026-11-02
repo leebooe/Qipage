@@ -1,9 +1,11 @@
+import { AERIAL_CATEGORIES, AERIAL_QUALITIES, AERIAL_SOURCE_URL, isAerialUrl } from './aerials.js';
+
 export const uid = () => crypto.randomUUID();
 export const clone = value => structuredClone(value);
 export const SETTINGS = {
   themeColor: '#d6e5bf',
   backgroundType: 'image', frequency: 'period', brightness: 82, opacity: 100,
-  cardOpacity: 30, blur: 16, query: 'forest nature', pixabayKey: '',
+  cardOpacity: 30, blur: 16, aerialCategory: 'all', aerialQuality: 'auto',
   clock24: true, showSeconds: false, showGreeting: true, name: '',
   searchEngine: 'bing', newTab: true, showQuote: true, showNotes: true,
 };
@@ -54,13 +56,11 @@ export function normalize(value) {
   const settings = { ...SETTINGS };
   if (typeof s.themeColor === 'string' && /^#[a-f\d]{6}$/i.test(s.themeColor)) settings.themeColor = s.themeColor.toLowerCase();
   for (const key of ['clock24', 'showSeconds', 'showGreeting', 'newTab', 'showQuote', 'showNotes']) if (typeof s[key] === 'boolean') settings[key] = s[key];
-  for (const [key, choices] of Object.entries({ backgroundType: ['image', 'video'], frequency: ['period', 'manual', 'newtab', 'hourly', 'daily', '300', '900', '1800'], searchEngine: ['bing', 'google', 'baidu', 'duckduckgo'] })) if (choices.includes(s[key])) settings[key] = s[key];
+  for (const [key, choices] of Object.entries({ backgroundType: ['image', 'video'], frequency: ['period', 'manual', 'newtab', 'hourly', 'daily', '300', '900', '1800'], aerialCategory: AERIAL_CATEGORIES.map(([key]) => key), aerialQuality: AERIAL_QUALITIES.map(([key]) => key), searchEngine: ['bing', 'google', 'baidu', 'duckduckgo'] })) if (choices.includes(s[key])) settings[key] = s[key];
   if (settings.backgroundType === 'video' && settings.frequency === 'period') settings.frequency = 'daily';
   for (const key of ['brightness', 'opacity', 'cardOpacity']) settings[key] = bounded(s[key], key === 'brightness' ? 15 : 0, 100, SETTINGS[key]);
   settings.blur = bounded(s.blur, 0, 30, 16);
-  settings.query = short(s.query, 100, SETTINGS.query).trim() || SETTINGS.query;
   settings.name = short(s.name, 30);
-  settings.pixabayKey = short(s.pixabayKey, 300);
   const ids = new Set();
   const unique = value => { let id = short(value, 80); if (!/^[a-z\d-]+$/i.test(id) || ids.has(id)) id = uid(); ids.add(id); return id; };
   const groups = value.groups.slice(0, 30).filter(g => g && typeof g === 'object').map(g => ({
@@ -80,14 +80,22 @@ export function normalize(value) {
   if (wp && ['image', 'video'].includes(wp.type)) {
     try {
       const media = new URL(wp.url);
-      const allowed = wp.type === 'image' ? media.hostname === 'images.unsplash.com' : media.hostname === 'cdn.pixabay.com';
-      if (allowed && media.protocol === 'https:') wallpaper = { type: wp.type, url: media.href, title: short(wp.title, 160), author: short(wp.author, 100), authorUrl: safeUrl(wp.authorUrl || '') || 'https://unsplash.com', pageUrl: safeUrl(wp.pageUrl || '') || 'https://unsplash.com', downloadUrl: short(wp.downloadUrl, 500), selectedAt: bounded(wp.selectedAt, 0, Date.now(), 0) };
+      const allowed = wp.type === 'image' ? media.hostname === 'images.unsplash.com' : wp.source === 'apple-aerial' && isAerialUrl(wp.url);
+      const sourceUrl = wp.type === 'video' ? AERIAL_SOURCE_URL : 'https://unsplash.com';
+      if (allowed && media.protocol === 'https:') wallpaper = { type: wp.type, url: media.href, title: short(wp.title, 160), author: short(wp.author, 100), authorUrl: safeUrl(wp.authorUrl || '') || sourceUrl, pageUrl: safeUrl(wp.pageUrl || '') || sourceUrl, downloadUrl: short(wp.downloadUrl, 500), selectedAt: bounded(wp.selectedAt, 0, Date.now(), 0) };
       if (wallpaper?.type === 'image') {
         wallpaper.period = ['morning', 'day', 'evening', 'night'].includes(wp.period) ? wp.period : '';
         wallpaper.collectionId = short(wp.collectionId, 30);
         if (wp.source === 'unsplash-collection') wallpaper.source = 'unsplash-collection';
         // Retire built-in selections while keeping photos read from collection pages or the legacy API.
         if (!wallpaper.source && !wallpaper.downloadUrl) wallpaper = null;
+      } else if (wallpaper?.type === 'video') {
+        wallpaper.source = 'apple-aerial';
+        wallpaper.id = short(wp.id, 80);
+        wallpaper.category = AERIAL_CATEGORIES.some(([key]) => key === wp.category) ? wp.category : '';
+        wallpaper.quality = wp.quality === '4k' ? '4k' : '1080p';
+        wallpaper.qualityPreference = AERIAL_QUALITIES.some(([key]) => key === wp.qualityPreference) ? wp.qualityPreference : 'auto';
+        if (!wallpaper.id) wallpaper = null;
       }
     } catch { /* A damaged wallpaper is replaced by the next online selection. */ }
   }
@@ -118,3 +126,4 @@ export async function writeCache(key, value) {
   if (globalThis.chrome?.storage?.local) await chrome.storage.local.set({ [key]: value });
   else localStorage.setItem(key, JSON.stringify(value));
 }
+
